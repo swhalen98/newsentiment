@@ -60,6 +60,7 @@ def get_gdelt_data(query, timespan):
 
 # -----------------------------------------------------------------------------
 # Draw the actual page
+st.sidebar.markdown("# Global News Sentiment & Pulse")
 
 # Set the title that appears at the top of the page.
 '''
