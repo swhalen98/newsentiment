@@ -1,151 +1,109 @@
 import streamlit as st
 import pandas as pd
-import math
-from pathlib import Path
+import requests
 
 # Set the title and favicon that appear in the Browser's tab bar.
 st.set_page_config(
-    page_title='GDP dahhshboard',
-    page_icon=':earth_americas:', # This is an emoji shortcode. Could be a URL too.
+    page_title='Global News Sentiment & Pulse',
+    page_icon=':newspaper:', # This is an emoji shortcode. Could be a URL too.
 )
 
 # -----------------------------------------------------------------------------
 # Declare some useful functions.
 
-@st.cache_data
-def get_gdp_data():
-    """Grab GDP data from a CSV file.
+@st.cache_data(ttl=3600)
+def get_gdelt_data(query, timespan):
+    """Grab GDELT data from the GDELT API.
 
-    This uses caching to avoid having to read the file every time. If we were
-    reading from an HTTP endpoint instead of a file, it's a good idea to set
-    a maximum age to the cache with the TTL argument: @st.cache_data(ttl='1d')
+    This uses caching to avoid having to hit the API every time. The cache is
+    set to expire every hour (3600 seconds).
     """
+    API_BASE_URL = "https://api.gdeltproject.org/api/v2/summary/summary"
+    params = {
+        "query": query,
+        "timespan": timespan,
+        "format": "json",
+        "datatype": "timeline",
+    }
+    try:
+        response = requests.get(API_BASE_URL, params=params)
+        response.raise_for_status()  # Raise an exception for bad status codes
+        data = response.json()
+        if 'timeline' in data:
+            return pd.DataFrame(data['timeline'])
+    except requests.exceptions.RequestException as e:
+        st.error(f"Error fetching data from GDELT API: {e}")
+    except ValueError:
+        st.error("Error parsing JSON response from GDELT API.")
+    return pd.DataFrame()
 
-    # Instead of a CSV on disk, you could read from an HTTP endpoint here too.
-    DATA_FILENAME = Path(__file__).parent/'data/gdp_data.csv'
-    raw_gdp_df = pd.read_csv(DATA_FILENAME)
-
-    MIN_YEAR = 1960
-    MAX_YEAR = 2022
-
-    # The data above has columns like:
-    # - Country Name
-    # - Country Code
-    # - [Stuff I don't care about]
-    # - GDP for 1960
-    # - GDP for 1961
-    # - GDP for 1962
-    # - ...
-    # - GDP for 2022
-    #
-    # ...but I want this instead:
-    # - Country Name
-    # - Country Code
-    # - Year
-    # - GDP
-    #
-    # So let's pivot all those year-columns into two: Year and GDP
-    gdp_df = raw_gdp_df.melt(
-        ['Country Code'],
-        [str(x) for x in range(MIN_YEAR, MAX_YEAR + 1)],
-        'Year',
-        'GDP',
-    )
-
-    # Convert years from string to integers
-    gdp_df['Year'] = pd.to_numeric(gdp_df['Year'])
-
-    return gdp_df
-
-gdp_df = get_gdp_data()
 
 # -----------------------------------------------------------------------------
 # Draw the actual page
 
 # Set the title that appears at the top of the page.
 '''
-# :earth_americas: GDP dashboard
+# :newspaper: Global News Sentiment & Pulse
 
-Browse GDP data from the [World Bank Open Data](https://data.worldbank.org/) website. As you'll
-notice, the data only goes to 2022 right now, and datapoints for certain years are often missing.
-But it's otherwise a great (and did I mention _free_?) source of data.
+Browse news volume and sentiment from the [GDELT Project](https://www.gdeltproject.org/).
+Enter a search term and select a timespan to see how the story is evolving across
+the global news landscape.
 '''
 
 # Add some spacing
 ''
 ''
 
-min_value = gdp_df['Year'].min()
-max_value = gdp_df['Year'].max()
+timespan = st.selectbox(
+    'Select a Timespan',
+    ('24h', '1w', '1m'),
+    index=1  # Default to '1w'
+)
 
-from_year, to_year = st.slider(
-    'Which years are you interested in?',
-    min_value=min_value,
-    max_value=max_value,
-    value=[min_value, max_value])
-
-countries = gdp_df['Country Code'].unique()
-
-if not len(countries):
-    st.warning("Select at least one country")
-
-selected_countries = st.multiselect(
-    'Which countries would you like to view?',
-    countries,
-    ['DEU', 'FRA', 'GBR', 'BRA', 'MEX', 'JPN'])
-
-''
-''
-''
-
-# Filter the data
-filtered_gdp_df = gdp_df[
-    (gdp_df['Country Code'].isin(selected_countries))
-    & (gdp_df['Year'] <= to_year)
-    & (from_year <= gdp_df['Year'])
-]
-
-st.header('GDP over time', divider='gray')
-
-''
-
-st.line_chart(
-    filtered_gdp_df,
-    x='Year',
-    y='GDP',
-    color='Country Code',
+search_term = st.text_input(
+    'Enter a Search Term',
+    'Artificial Intelligence'
 )
 
 ''
 ''
-
-
-first_year = gdp_df[gdp_df['Year'] == from_year]
-last_year = gdp_df[gdp_df['Year'] == to_year]
-
-st.header(f'GDP in {to_year}', divider='gray')
-
 ''
 
-cols = st.columns(4)
+# Fetch and process the data
+if search_term:
+    gdelt_df = get_gdelt_data(search_term, timespan)
 
-for i, country in enumerate(selected_countries):
-    col = cols[i % len(cols)]
+    if not gdelt_df.empty:
+        gdelt_df['datetime'] = pd.to_datetime(gdelt_df['datetime'])
+        gdelt_df.rename(columns={'value': 'Mention Volume'}, inplace=True)
 
-    with col:
-        first_gdp = first_year[first_year['Country Code'] == country]['GDP'].iat[0] / 1000000000
-        last_gdp = last_year[last_year['Country Code'] == country]['GDP'].iat[0] / 1000000000
-
-        if math.isnan(first_gdp):
-            growth = 'n/a'
-            delta_color = 'off'
-        else:
-            growth = f'{last_gdp / first_gdp:,.2f}x'
-            delta_color = 'normal'
-
-        st.metric(
-            label=f'{country} GDP',
-            value=f'{last_gdp:,.0f}B',
-            delta=growth,
-            delta_color=delta_color
+        st.header('Mention Volume Over Time', divider='gray')
+        ''
+        st.line_chart(
+            gdelt_df,
+            x='datetime',
+            y='Mention Volume',
         )
+        ''
+        ''
+
+        # Calculate metrics
+        total_mentions = gdelt_df['Mention Volume'].sum()
+        peak_volume = gdelt_df['Mention Volume'].max()
+        # The 'tone' data is often coarse, so we'll use a simple average for this example
+        average_tone = gdelt_df['tone'].mean() if 'tone' in gdelt_df.columns else 0
+
+        st.header('Key Metrics', divider='gray')
+        ''
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric(label="Total Mentions", value=f"{int(total_mentions):,}")
+        with col2:
+            st.metric(label="Peak Volume", value=f"{int(peak_volume):,}")
+        with col3:
+            st.metric(label="Avg. Sentiment", value=f"{average_tone:.2f}")
+
+    else:
+        st.warning(f"No results found for '{search_term}' in the last {timespan}. Try another query.")
+else:
+    st.info("Please enter a search term to begin.")
