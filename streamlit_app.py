@@ -33,7 +33,7 @@ def get_gdelt_data(query, timespan):
         response.raise_for_status()  # Raise an exception for bad status codes
         data = response.json()
         if 'timeline' in data and data['timeline']:
-            series = data['timeline'][0].get('series')
+            series = data['timeline'][0].get('data')
             if series:
                 df = pd.DataFrame(series)
                 df.rename(columns={'date': 'datetime'}, inplace=True)
