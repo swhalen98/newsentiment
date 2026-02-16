@@ -24,9 +24,13 @@ def get_gdelt_data(query, timespan):
         "timespan": timespan,
         "format": "json",
         "datatype": "timeline",
+        "dataset": "trend",
+    }
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/107.0.0.0 Safari/537.36"
     }
     try:
-        response = requests.get(API_BASE_URL, params=params)
+        response = requests.get(API_BASE_URL, params=params, headers=headers, timeout=10)
         response.raise_for_status()  # Raise an exception for bad status codes
         data = response.json()
         if 'timeline' in data:
@@ -34,7 +38,7 @@ def get_gdelt_data(query, timespan):
     except requests.exceptions.RequestException as e:
         st.error(f"Error fetching data from GDELT API: {e}")
     except ValueError:
-        st.error("Error parsing JSON response from GDELT API.")
+        st.error(f"Error parsing JSON response from GDELT API. The API returned: {response.text[:500]}")
     return pd.DataFrame()
 
 
