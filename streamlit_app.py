@@ -18,13 +18,12 @@ def get_gdelt_data(query, timespan):
     This uses caching to avoid having to hit the API every time. The cache is
     set to expire every hour (3600 seconds).
     """
-    API_BASE_URL = "https://api.gdeltproject.org/api/v2/summary/summary"
+    API_BASE_URL = "https://api.gdeltproject.org/api/v2/doc/doc"
     params = {
-        "query": query,
+        "query": f"{query} sourcecountry:US",
+        "mode": "timelinevol",
         "timespan": timespan,
         "format": "json",
-        "datatype": "timeline",
-        "dataset": "trend",
     }
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/107.0.0.0 Safari/537.36"
@@ -33,8 +32,12 @@ def get_gdelt_data(query, timespan):
         response = requests.get(API_BASE_URL, params=params, headers=headers, timeout=10)
         response.raise_for_status()  # Raise an exception for bad status codes
         data = response.json()
-        if 'timeline' in data:
-            return pd.DataFrame(data['timeline'])
+        if 'timeline' in data and data['timeline']:
+            series = data['timeline'][0].get('series')
+            if series:
+                df = pd.DataFrame(series)
+                df.rename(columns={'date': 'datetime'}, inplace=True)
+                return df
     except requests.exceptions.RequestException as e:
         st.error(f"Error fetching data from GDELT API: {e}")
     except ValueError:
