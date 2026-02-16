@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import requests
+from tenacity import retry, wait_exponential, stop_after_attempt, RetriableError
 
 # Set the title and favicon that appear in the Browser's tab bar.
 st.set_page_config(
@@ -12,6 +13,11 @@ st.set_page_config(
 # Declare some useful functions.
 
 @st.cache_data(ttl=3600)
+@retry(
+    wait=wait_exponential(multiplier=1, min=4, max=10),
+    stop=stop_after_attempt(5),
+    retry=(RetriableError, requests.exceptions.RequestException)
+)
 def get_gdelt_data(query, timespan):
     """Grab GDELT data from the GDELT API.
 
@@ -39,9 +45,16 @@ def get_gdelt_data(query, timespan):
                 df.rename(columns={'date': 'datetime'}, inplace=True)
                 return df
     except requests.exceptions.RequestException as e:
-        st.error(f"Error fetching data from GDELT API: {e}")
+        if e.response.status_code == 429: # Too Many Requests
+            st.error(f"Error fetching data from GDELT API: {e}. Retrying...")
+            raise RetriableError(f"Rate limited by GDELT API: {e}") from e
+        else:
+            st.error(f"Error fetching data from GDELT API: {e}")
     except ValueError:
         st.error(f"Error parsing JSON response from GDELT API. The API returned: {response.text[:500]}")
+    except RetriableError:
+        # This will be caught by tenacity's retry mechanism
+        raise
     return pd.DataFrame()
 
 
