@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 import requests
-from tenacity import retry, wait_exponential, stop_after_attempt, RetriableError
+from tenacity import retry, wait_exponential, stop_after_attempt, retry_if_exception_type
 from collections import defaultdict
 import plotly.express as px
 import json
@@ -31,7 +31,8 @@ US_STATES = {
 @retry(
     wait=wait_exponential(multiplier=1, min=4, max=10),
     stop=stop_after_attempt(5),
-    retry=(RetriableError, requests.exceptions.RequestException)
+    retry=retry_if_exception_type(requests.exceptions.RequestException),
+    reraise=True,
 )
 def get_gdelt_state_news_data(state_abbr, query, timespan):
     """
@@ -42,7 +43,7 @@ def get_gdelt_state_news_data(state_abbr, query, timespan):
     API_BASE_URL_GKG = "https://api.gdeltproject.org/api/v1/gkg_geojson"
 
     gdelt_state_code = f"US{state_abbr}" # e.g., 'USTX' for Texas
-    
+
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/107.0.0.0 Safari/537.36"
     }
@@ -67,15 +68,13 @@ def get_gdelt_state_news_data(state_abbr, query, timespan):
                 df.rename(columns={'date': 'datetime'}, inplace=True)
                 news_volume_df = df
     except requests.exceptions.RequestException as e:
-        if e.response is not None and e.response.status_code == 429:
+        if hasattr(e, 'response') and e.response is not None and e.response.status_code == 429:
             st.error(f"Rate limited by GDELT API for volume ({state_abbr}): {e}. Retrying...")
-            raise RetriableError(f"Rate limited by GDELT API for volume ({state_abbr}): {e}") from e
+            raise  # tenacity will retry on RequestException
         else:
             st.error(f"Error fetching volume for {state_abbr} from GDELT API: {e}")
     except ValueError:
         st.error(f"Error parsing JSON for volume ({state_abbr}) from GDELT API: {response.text[:500]}")
-    except RetriableError:
-        raise
 
     # --- Fetch Top Topics (Themes) ---
     top_themes = defaultdict(int)
@@ -100,19 +99,17 @@ def get_gdelt_state_news_data(state_abbr, query, timespan):
                         if clean_theme: # Ensure theme is not empty
                             top_themes[clean_theme] += 1
     except requests.exceptions.RequestException as e:
-        if e.response is not None and e.response.status_code == 429:
+        if hasattr(e, 'response') and e.response is not None and e.response.status_code == 429:
             st.error(f"Rate limited by GDELT API for themes ({state_abbr}): {e}. Retrying...")
-            raise RetriableError(f"Rate limited by GDELT API for themes ({state_abbr}): {e}") from e
+            raise  # tenacity will retry on RequestException
         else:
             st.error(f"Error fetching themes for {state_abbr} from GDELT API: {e}")
     except ValueError:
         st.error(f"Error parsing JSON for themes ({state_abbr}) from GDELT API: {response.text[:500]}")
-    except RetriableError:
-        raise
 
     # Sort themes by count and get the top ones
     sorted_themes = sorted(top_themes.items(), key=lambda item: item[1], reverse=True)
-    
+
     return {
         "state_name": US_STATES[state_abbr],
         "news_volume": news_volume_df,
@@ -137,18 +134,18 @@ timespan_map = st.selectbox(
 
 if search_term_map:
     all_states_data = []
-    
+
     progress_text = st.empty()
     progress_bar = st.progress(0)
-    
+
     for i, (state_abbr, state_name) in enumerate(US_STATES.items()):
         progress_text.text(f"Fetching data for {state_name} ({state_abbr})...")
         progress_bar.progress((i + 1) / len(US_STATES))
-        
+
         try:
             state_data = get_gdelt_state_news_data(state_abbr, search_term_map, timespan_map)
             all_states_data.append(state_data)
-        except RetriableError:
+        except requests.exceptions.RequestException:
             st.warning(f"Failed to fetch data for {state_name} after multiple retries due to rate limiting. Please try again later.")
             continue # Skip this state and continue with others
 
@@ -168,7 +165,7 @@ if search_term_map:
                 'top_theme_2': state_data['top_themes'][1][0] if len(state_data['top_themes']) > 1 else 'N/A',
                 'top_theme_2_count': state_data['top_themes'][1][1] if len(state_data['top_themes']) > 1 else 0,
             })
-        
+
         map_df = pd.DataFrame(map_data)
 
         # Load GeoJSON for US states
@@ -176,7 +173,7 @@ if search_term_map:
         # For simplicity, let's assume we have a way to get this
         # Example using a common public GeoJSON (replace with a local one if needed)
         geojson_url = "https://raw.githubusercontent.com/PublicaMundi/MappingAPI/master/data/geojson/us-states.json"
-        
+
         try:
             geojson_response = requests.get(geojson_url, timeout=5)
             geojson_response.raise_for_status()
@@ -187,7 +184,7 @@ if search_term_map:
 
         if us_states_geojson:
             st.header('US News Volume and Top Topics by State', divider='gray')
-            
+
             # Create choropleth map
             fig = px.choropleth(
                 map_df,

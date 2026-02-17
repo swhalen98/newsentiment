@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 import requests
-from tenacity import retry, wait_exponential, stop_after_attempt, RetriableError
+from tenacity import retry, wait_exponential, stop_after_attempt, retry_if_exception_type
 from collections import defaultdict
 
 st.set_page_config(page_title="Top Stocks News", page_icon=":chart_with_upwards_trend:", layout="wide")
@@ -20,7 +20,8 @@ FMP_API_KEY = st.secrets["FMP_API_KEY"] if "FMP_API_KEY" in st.secrets else "YOU
 @retry(
     wait=wait_exponential(multiplier=1, min=4, max=10),
     stop=stop_after_attempt(5),
-    retry=(RetriableError, requests.exceptions.RequestException)
+    retry=retry_if_exception_type(requests.exceptions.RequestException),
+    reraise=True,
 )
 def get_top_stocks_by_market_cap(limit=25):
     """
@@ -31,7 +32,7 @@ def get_top_stocks_by_market_cap(limit=25):
         return []
 
     FMP_API_BASE_URL = "https://financialmodelingprep.com/api/v3/stock-screener"
-    
+
     # Filter for large market cap and sort by market cap in descending order
     # Using a very large marketCapMoreThan to ensure we get large-cap stocks
     params = {
@@ -41,7 +42,7 @@ def get_top_stocks_by_market_cap(limit=25):
         "exchange": "NASDAQ,NYSE", # Focus on major US exchanges
         "apikey": FMP_API_KEY
     }
-    
+
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/107.0.0.0 Safari/537.36"
     }
@@ -57,15 +58,13 @@ def get_top_stocks_by_market_cap(limit=25):
             return sorted_stocks[:limit]
         return []
     except requests.exceptions.RequestException as e:
-        if e.response is not None and e.response.status_code == 429:
+        if hasattr(e, 'response') and e.response is not None and e.response.status_code == 429:
             st.error(f"Rate limited by FMP API: {e}. Retrying...")
-            raise RetriableError(f"Rate limited by FMP API: {e}") from e
+            raise  # tenacity will retry on RequestException
         else:
             st.error(f"Error fetching top stocks from FMP API: {e}")
     except ValueError:
         st.error(f"Error parsing JSON response from FMP API: {response.text[:500]}")
-    except RetriableError:
-        raise
     return []
 
 # --- GDELT API Configuration (reusing logic from streamlit_app.py and us_news_map.py) ---
@@ -73,14 +72,15 @@ def get_top_stocks_by_market_cap(limit=25):
 @retry(
     wait=wait_exponential(multiplier=1, min=4, max=10),
     stop=stop_after_attempt(5),
-    retry=(RetriableError, requests.exceptions.RequestException)
+    retry=retry_if_exception_type(requests.exceptions.RequestException),
+    reraise=True,
 )
 def get_gdelt_news_for_company(company_name, timespan):
     """
     Fetches top news themes for a given company from the GDELT GKG API.
     """
     API_BASE_URL_GKG = "https://api.gdeltproject.org/api/v1/gkg_geojson"
-    
+
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/107.0.0.0 Safari/537.36"
     }
@@ -107,19 +107,17 @@ def get_gdelt_news_for_company(company_name, timespan):
                         if clean_theme: # Ensure theme is not empty
                             top_themes[clean_theme] += 1
     except requests.exceptions.RequestException as e:
-        if e.response is not None and e.response.status_code == 429:
+        if hasattr(e, 'response') and e.response is not None and e.response.status_code == 429:
             st.error(f"Rate limited by GDELT API for themes ({company_name}): {e}. Retrying...")
-            raise RetriableError(f"Rate limited by GDELT API for themes ({company_name}): {e}") from e
+            raise  # tenacity will retry on RequestException
         else:
             st.error(f"Error fetching themes for {company_name} from GDELT API: {e}")
     except ValueError:
         st.error(f"Error parsing JSON for themes ({company_name}) from GDELT API: {response.text[:500]}")
-    except RetriableError:
-        raise
 
     # Sort themes by count and get the top ones
     sorted_themes = sorted(top_themes.items(), key=lambda item: item[1], reverse=True)
-    
+
     # Extract top 3 news words (themes) - each theme is a "word" or phrase
     top_3_themes_text = [theme[0] for theme in sorted_themes[:3]]
     return top_3_themes_text
@@ -136,7 +134,7 @@ timespan_stocks = st.selectbox(
 
 if st.button("Fetch Top Stocks and News"):
     top_stocks = get_top_stocks_by_market_cap(limit=25)
-    
+
     if top_stocks:
         stocks_with_news = []
         progress_text_stocks = st.empty()
@@ -159,7 +157,7 @@ if st.button("Fetch Top Stocks and News"):
                         "Market Cap": f"${market_cap:,.0f}",
                         "Top 3 News Themes": ", ".join(top_themes) if top_themes else "N/A"
                     })
-                except RetriableError:
+                except requests.exceptions.RequestException:
                     st.warning(f"Failed to fetch news for {company_name} after multiple retries due to rate limiting. Skipping.")
                     stocks_with_news.append({
                         "Symbol": symbol,
@@ -177,7 +175,7 @@ if st.button("Fetch Top Stocks and News"):
 
         progress_bar_stocks.empty()
         progress_text_stocks.empty()
-        
+
         st.dataframe(pd.DataFrame(stocks_with_news))
     else:
         st.warning("Could not fetch top stocks. Please check your FMP API key and try again.")

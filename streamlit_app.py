@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 import requests
-from tenacity import retry, wait_exponential, stop_after_attempt, RetriableError
+from tenacity import retry, wait_exponential, stop_after_attempt, retry_if_exception_type
 
 # Set the title and favicon that appear in the Browser's tab bar.
 st.set_page_config(
@@ -16,7 +16,8 @@ st.set_page_config(
 @retry(
     wait=wait_exponential(multiplier=1, min=4, max=10),
     stop=stop_after_attempt(5),
-    retry=(RetriableError, requests.exceptions.RequestException)
+    retry=retry_if_exception_type(requests.exceptions.RequestException),
+    reraise=True,
 )
 def get_gdelt_data(query, timespan):
     """Grab GDELT data from the GDELT API.
@@ -45,16 +46,13 @@ def get_gdelt_data(query, timespan):
                 df.rename(columns={'date': 'datetime'}, inplace=True)
                 return df
     except requests.exceptions.RequestException as e:
-        if e.response.status_code == 429: # Too Many Requests
+        if hasattr(e, 'response') and e.response is not None and e.response.status_code == 429:
             st.error(f"Error fetching data from GDELT API: {e}. Retrying...")
-            raise RetriableError(f"Rate limited by GDELT API: {e}") from e
+            raise  # tenacity will retry on RequestException
         else:
             st.error(f"Error fetching data from GDELT API: {e}")
     except ValueError:
         st.error(f"Error parsing JSON response from GDELT API. The API returned: {response.text[:500]}")
-    except RetriableError:
-        # This will be caught by tenacity's retry mechanism
-        raise
     return pd.DataFrame()
 
 
