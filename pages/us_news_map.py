@@ -59,14 +59,14 @@ def get_gdelt_state_news_data(state_abbr, query, timespan):
     try:
         response = requests.get(API_BASE_URL_DOC, params=volume_params, headers=headers, timeout=10)
         response.raise_for_status()
-        data = response.json()
-
-        if 'timeline' in data and data['timeline']:
-            series = data['timeline'][0].get('data')
-            if series:
-                df = pd.DataFrame(series)
-                df.rename(columns={'date': 'datetime'}, inplace=True)
-                news_volume_df = df
+        if response.text.strip():
+            data = response.json()
+            if 'timeline' in data and data['timeline']:
+                series = data['timeline'][0].get('data')
+                if series:
+                    df = pd.DataFrame(series)
+                    df.rename(columns={'date': 'datetime'}, inplace=True)
+                    news_volume_df = df
     except requests.exceptions.RequestException as e:
         if hasattr(e, 'response') and e.response is not None and e.response.status_code == 429:
             st.error(f"Rate limited by GDELT API for volume ({state_abbr}): {e}. Retrying...")
@@ -87,7 +87,10 @@ def get_gdelt_state_news_data(state_abbr, query, timespan):
     try:
         response = requests.get(API_BASE_URL_GKG, params=gkg_params, headers=headers, timeout=10)
         response.raise_for_status()
-        gkg_data = response.json()
+        if response.text.strip():
+            gkg_data = response.json()
+        else:
+            gkg_data = {}
 
         if 'features' in gkg_data:
             for feature in gkg_data['features']:

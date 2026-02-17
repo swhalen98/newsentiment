@@ -50,6 +50,8 @@ def get_top_stocks_by_market_cap(limit=25):
     try:
         response = requests.get(FMP_API_BASE_URL, params=params, headers=headers, timeout=10)
         response.raise_for_status()
+        if not response.text.strip():
+            return []
         stocks_data = response.json()
 
         if stocks_data:
@@ -95,7 +97,10 @@ def get_gdelt_news_for_company(company_name, timespan):
     try:
         response = requests.get(API_BASE_URL_GKG, params=gkg_params, headers=headers, timeout=10)
         response.raise_for_status()
-        gkg_data = response.json()
+        if response.text.strip():
+            gkg_data = response.json()
+        else:
+            gkg_data = {}
 
         if 'features' in gkg_data:
             for feature in gkg_data['features']:

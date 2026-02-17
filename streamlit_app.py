@@ -38,6 +38,8 @@ def get_gdelt_data(query, timespan):
     try:
         response = requests.get(API_BASE_URL, params=params, headers=headers, timeout=10)
         response.raise_for_status()  # Raise an exception for bad status codes
+        if not response.text.strip():
+            return pd.DataFrame()
         data = response.json()
         if 'timeline' in data and data['timeline']:
             series = data['timeline'][0].get('data')
