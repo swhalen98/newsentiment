@@ -1,114 +1,102 @@
 import streamlit as st
-import pandas as pd
-import requests
-from tenacity import retry, wait_exponential, stop_after_attempt, retry_if_exception_type
-from database import get_top_stocks_news_from_db, insert_stock_news
+import plotly.express as px
+import fmp_client
+import database
 
-st.set_page_config(page_title="Top Stocks News", page_icon=":chart_with_upwards_trend:", layout="wide")
+st.set_page_config(page_title="Market Movers & News", page_icon=":chart_with_upwards_trend:", layout="wide")
 
-st.sidebar.markdown("# Top Stocks News")
-st.markdown("# Top Stocks News")
+st.sidebar.markdown("# Market Movers & News")
+st.markdown("# Market Movers & News")
+st.write("Top gaining, losing, and most active stocks — plus the latest news. All data is free-tier FMP.")
 
-st.write("This page will display top 25 stocks by market cap and their top news words.")
+# ---------------------------------------------------------------------------
+# Refresh
+# ---------------------------------------------------------------------------
+if st.button("Refresh Market Data"):
+    with st.spinner("Fetching gainers, losers, actives, and news..."):
+        errors = []
 
-# --- FMP API Configuration ---
-FMP_API_KEY = st.secrets.get("FMP_API_KEY", "YOUR_FMP_API_KEY")
+        for mover_type, fn in [("gainer", fmp_client.get_gainers),
+                                ("loser", fmp_client.get_losers),
+                                ("active", fmp_client.get_actives)]:
+            try:
+                database.insert_market_movers(mover_type, fn())
+            except Exception as e:
+                errors.append(f"{mover_type.capitalize()}s: {e}")
 
-@st.cache_data(ttl=3600)
-@retry(
-    wait=wait_exponential(multiplier=1, min=4, max=10),
-    stop=stop_after_attempt(5),
-    retry=retry_if_exception_type(requests.exceptions.RequestException),
-    reraise=True,
-)
-def get_top_stocks_by_market_cap(limit=25):
-    """
-    Fetches a list of top stocks by market capitalization using the FMP Stock Screener API.
-    """
-    if FMP_API_KEY == "YOUR_FMP_API_KEY":
-        st.error("Please set your FMP_API_KEY in Streamlit secrets or replace the placeholder.")
-        return []
-
-    FMP_API_BASE_URL = "https://financialmodelingprep.com/api/v3/stock-screener"
-    params = {
-        "marketCapMoreThan": 10000000000,  # > $10 Billion
-        "limit": limit * 2,
-        "sort": "marketCap",
-        "exchange": "NASDAQ,NYSE",
-        "apikey": FMP_API_KEY
-    }
-    headers = {"User-Agent": "Mozilla/5.0"}
-
-    try:
-        response = requests.get(FMP_API_BASE_URL, params=params, headers=headers, timeout=10)
-        response.raise_for_status()
-        stocks_data = response.json()
-        return sorted(stocks_data, key=lambda x: x.get('marketCap', 0), reverse=True)[:limit] if stocks_data else []
-    except requests.exceptions.RequestException as e:
-        st.error(f"Error fetching top stocks from FMP API: {e}")
-    except ValueError:
-        st.error(f"Error parsing JSON response from FMP API: {response.text[:500]}")
-    return []
-
-@st.cache_data(ttl=3600)
-@retry(
-    wait=wait_exponential(multiplier=1, min=4, max=10),
-    stop=stop_after_attempt(5),
-    retry=retry_if_exception_type(requests.exceptions.RequestException),
-    reraise=True,
-)
-def get_stock_news_from_fmp(symbols):
-    """
-    Fetches news with sentiment for a list of stock symbols from the FMP API.
-    """
-    if FMP_API_KEY == "YOUR_FMP_API_KEY":
-        st.error("Please set your FMP_API_KEY in Streamlit secrets or replace the placeholder.")
-        return []
-
-    FMP_API_BASE_URL = "https://financialmodelingprep.com/api/v4/stock-news-sentiments-rss-feed"
-    all_news = []
-    for symbol in symbols:
-        params = {"symbol": symbol, "apikey": FMP_API_KEY}
-        headers = {"User-Agent": "Mozilla/5.0"}
         try:
-            response = requests.get(FMP_API_BASE_URL, params=params, headers=headers, timeout=10)
-            response.raise_for_status()
-            news_data = response.json().get('items', [])
-            for item in news_data:
-                item['symbol'] = symbol
-            all_news.extend(news_data)
-        except requests.exceptions.RequestException as e:
-            st.warning(f"Error fetching news for {symbol}: {e}")
-        except ValueError:
-            st.error(f"Error parsing JSON for {symbol}: {response.text[:500]}")
-    return all_news
+            database.insert_news(fmp_client.get_stock_news())
+        except Exception as e:
+            errors.append(f"News: {e}")
 
-# --- Main App Logic ---
-st.header('Top 25 Companies by Market Cap with Related News Sentiment', divider='gray')
+        if errors:
+            for err in errors:
+                st.error(err)
+        else:
+            st.success("Market data refreshed.")
+        st.rerun()
 
-if st.button("Fetch Top Stocks and News"):
-    top_stocks = get_top_stocks_by_market_cap(limit=25)
+# ---------------------------------------------------------------------------
+# Market movers — tabs
+# ---------------------------------------------------------------------------
+st.header("Market Movers", divider="gray")
+tab_gainers, tab_losers, tab_actives = st.tabs(["Gainers", "Losers", "Most Active"])
 
-    if top_stocks:
-        symbols = [stock['symbol'] for stock in top_stocks]
-        news_data = get_stock_news_from_fmp(symbols)
 
-        if news_data:
-            # Add company info to news data
-            for news_item in news_data:
-                stock_info = next((s for s in top_stocks if s['symbol'] == news_item['symbol']), None)
-                if stock_info:
-                    news_item['companyName'] = stock_info.get('companyName')
-                    news_item['marketCap'] = stock_info.get('marketCap')
+def render_movers(mover_type):
+    df = database.get_latest_market_movers(mover_type)
+    if df.empty:
+        st.info("No data yet — click **Refresh Market Data** above.")
+        return
 
-            insert_stock_news(news_data)
-            st.success("Successfully fetched and stored the latest stock news.")
+    as_of = df["fetched_at"].iloc[0]
+    st.caption(f"Last updated: {as_of}")
 
-# Display news from the database
-st.header("Latest News from Top Stocks", divider='gray')
-news_df = get_top_stocks_news_from_db()
+    fig = px.bar(
+        df.head(20),
+        x="symbol",
+        y="changesPercentage",
+        hover_data=["name", "price", "volume"],
+        labels={"changesPercentage": "% Change", "symbol": "Symbol"},
+        color="changesPercentage",
+        color_continuous_scale=px.colors.diverging.RdYlGn,
+        color_continuous_midpoint=0,
+        text_auto=".2f",
+    )
+    st.plotly_chart(fig, use_container_width=True)
 
-if not news_df.empty:
-    st.dataframe(news_df[['companyName', 'news_title', 'news_sentiment', 'publishedDate', 'news_url']])
+    st.dataframe(
+        df[["symbol", "name", "price", "changesPercentage", "volume"]]
+        .rename(columns={"changesPercentage": "% Change"}),
+        hide_index=True,
+        use_container_width=True,
+    )
+
+
+with tab_gainers:
+    render_movers("gainer")
+
+with tab_losers:
+    render_movers("loser")
+
+with tab_actives:
+    render_movers("active")
+
+# ---------------------------------------------------------------------------
+# News feed
+# ---------------------------------------------------------------------------
+st.header("Latest News", divider="gray")
+news_df = database.get_news(limit=50)
+
+if news_df.empty:
+    st.info("No news yet — click **Refresh Market Data** above.")
 else:
-    st.info("No news data found in the database. Click the button above to fetch data.")
+    for _, row in news_df.iterrows():
+        cols = st.columns([0.85, 0.15])
+        with cols[0]:
+            st.markdown(f"**[{row['title']}]({row['url']})**")
+        with cols[1]:
+            if row.get("symbol"):
+                st.code(row["symbol"], language=None)
+        st.caption(f"{row.get('site', '')}  ·  {row.get('publishedDate', '')}")
+        st.divider()

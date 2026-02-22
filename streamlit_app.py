@@ -25,8 +25,8 @@ This application provides tools to analyze news sentiment and volume from variou
 
 Use the sidebar to navigate to the different pages:
 
-- **Top Stocks News:** View news and sentiment for the top 25 stocks by market cap.
-- **Sector Performance:** Analyze the performance of different market sectors and related news.
+- **Market Movers & News:** Top gaining, losing, and most active stocks with the latest news.
+- **Sector Performance:** Daily % change across 11 market sectors tracked via ETF proxies.
 
 '''
 
